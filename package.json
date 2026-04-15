@@ -1,0 +1,9 @@
+{
+  "name": "slime-pet",
+  "version": "1.0.0",
+  "description": "史萊姆螢幕寵物",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  }
+}

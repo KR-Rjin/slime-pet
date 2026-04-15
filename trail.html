@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; }
+  html, body { width:100%; height:100%; background:transparent; overflow:hidden; }
+  canvas { display:block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const { ipcRenderer } = require('electron');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+function resize(){ canvas.width=window.innerWidth; canvas.height=window.innerHeight; }
+resize(); window.addEventListener('resize',resize);
+
+const BLOBS=[];
+
+function makeOrganicBlob(ex,ey,nx,ny,tx,ty){
+  const lenAlong=8+Math.random()*16, lenDeep=4+Math.random()*8;
+  const offT=(Math.random()-0.5)*lenAlong*0.6;
+  const steps=3+Math.floor(Math.random()*2);
+  const ctrlPts=[];
+  const startT=-lenAlong+offT, endT=lenAlong+offT;
+  ctrlPts.push({t:startT,d:Math.random()*lenDeep*0.3});
+  for(let i=1;i<steps;i++){
+    const frac=i/steps;
+    const baseDepth=Math.sin(frac*Math.PI)*lenDeep;
+    ctrlPts.push({t:startT+(endT-startT)*frac+(Math.random()-0.5)*6,d:Math.max(0.5,baseDepth+(Math.random()-0.5)*lenDeep*0.7)});
+  }
+  ctrlPts.push({t:endT,d:Math.random()*lenDeep*0.3});
+  const topPts=ctrlPts.map(p=>({x:ex+tx*p.t-nx*(p.d*0.1+Math.random()*1.5),y:ey+ty*p.t-ny*(p.d*0.1+Math.random()*1.5)}));
+  const botPts=[...ctrlPts].reverse().map(p=>({x:ex+tx*p.t-nx*(p.d+Math.random()*2),y:ey+ty*p.t-ny*(p.d+Math.random()*2)}));
+  return [...topPts,...botPts];
+}
+
+let lastBX=-999,lastBY=-999;
+
+ipcRenderer.on('trail-blob',(e,{cx,cy,ex,ey,nx,ny})=>{
+  if(Math.hypot(cx-lastBX,cy-lastBY)<20) return;
+  if(Math.random()<0.30) return;
+  lastBX=cx; lastBY=cy;
+  const tx=-ny,ty=nx;
+  BLOBS.push({pts:makeOrganicBlob(ex,ey,nx,ny,tx,ty),life:1.0,ex,ey,cx,cy});
+  if(BLOBS.length>55) BLOBS.shift();
+});
+
+function drawBlobShape(pts){
+  const n=pts.length; if(n<3) return;
+  ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+  for(let i=0;i<n;i++){
+    const p0=pts[i%n],p1=pts[(i+1)%n],p2=pts[(i+2)%n];
+    ctx.bezierCurveTo(
+      p0.x+(p1.x-pts[(i-1+n)%n].x)*0.18,p0.y+(p1.y-pts[(i-1+n)%n].y)*0.18,
+      p1.x-(p2.x-p0.x)*0.18,p1.y-(p2.y-p0.y)*0.18,
+      p1.x,p1.y
+    );
+  }
+  ctx.closePath();
+}
+
+function loop(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  for(let i=0;i<BLOBS.length;i++){
+    const b=BLOBS[i];
+    b.life=Math.max(0,b.life-0.0022);
+    if(b.life<=0) continue;
+    drawBlobShape(b.pts);
+    const grad=ctx.createLinearGradient(b.ex,b.ey,b.cx,b.cy);
+    grad.addColorStop(0,  `rgba(200,240,255,${b.life*0.07})`);
+    grad.addColorStop(0.25,`rgba(160,225,255,${b.life*0.22})`);
+    grad.addColorStop(0.6, `rgba(120,205,255,${b.life*0.18})`);
+    grad.addColorStop(1,   `rgba(80,180,240,0)`);
+    ctx.fillStyle=grad; ctx.fill();
+    drawBlobShape(b.pts);
+    ctx.strokeStyle=`rgba(210,245,255,${b.life*0.09})`; ctx.lineWidth=0.7; ctx.stroke();
+  }
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
