@@ -4,28 +4,30 @@
 <meta charset="UTF-8">
 <style>
   * { margin:0; padding:0; }
-  html, body { width:120px; height:120px; background:transparent; overflow:hidden; }
+  html, body { width:170px; height:170px; background:transparent; overflow:hidden; }
   canvas { display:block; cursor:grab; }
   canvas.dragging { cursor:grabbing; }
   #color-input { position:fixed; opacity:0; pointer-events:none; width:1px; height:1px; }
 </style>
 </head>
 <body>
-<canvas id="c" width="120" height="120"></canvas>
+<canvas id="c" width="170" height="170"></canvas>
 <input type="color" id="color-input">
 <script>
 const { ipcRenderer } = require('electron');
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const colorInput = document.getElementById('color-input');
-const W=120, H=120;
+const W=170, H=170;
+const R_BASE=26;
+const CHAMFER=40;
+const MAX_FLAT_Y=Math.ceil(R_BASE*2.0*0.52); // scale=2時的最大flatY=28
 
-// ── 設定 ──
 let slimeScale = parseFloat(localStorage.getItem('slime-scale') || '1.0');
 let baseColor  = localStorage.getItem('slime-color') || '#1aa0d0';
 
-function parseColor(hex) {
-  const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+function parseColor(hex){
+  const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
   return {
     light:`rgba(${Math.min(255,r+80)},${Math.min(255,g+80)},${Math.min(255,b+80)}`,
     mid:  `rgba(${r},${g},${b}`,
@@ -33,51 +35,44 @@ function parseColor(hex) {
   };
 }
 
-// ── IPC ──
-ipcRenderer.on('set-color', (e,hex)=>{ baseColor=hex; localStorage.setItem('slime-color',hex); });
-ipcRenderer.on('open-color-picker', ()=>{ colorInput.value=baseColor; colorInput.click(); });
-colorInput.addEventListener('input', e=>{ baseColor=e.target.value; localStorage.setItem('slime-color',baseColor); });
-ipcRenderer.on('resize-slime', (e,delta)=>{
+ipcRenderer.on('set-color',(e,hex)=>{ baseColor=hex; localStorage.setItem('slime-color',hex); });
+ipcRenderer.on('open-color-picker',()=>{ colorInput.value=baseColor; colorInput.click(); });
+colorInput.addEventListener('input',e=>{ baseColor=e.target.value; localStorage.setItem('slime-color',baseColor); });
+ipcRenderer.on('resize-slime',(e,delta)=>{
   slimeScale=Math.max(0.5,Math.min(2.0,slimeScale+delta));
   localStorage.setItem('slime-scale',slimeScale.toString());
 });
-canvas.addEventListener('contextmenu', e=>{ e.preventDefault(); ipcRenderer.send('show-context-menu'); });
-canvas.addEventListener('wheel', e=>{
+canvas.addEventListener('contextmenu',e=>{ e.preventDefault(); ipcRenderer.send('show-context-menu'); });
+canvas.addEventListener('wheel',e=>{
   e.preventDefault();
   slimeScale=Math.max(0.5,Math.min(2.0,slimeScale+(e.deltaY>0?-0.10:0.10)));
   localStorage.setItem('slime-scale',slimeScale.toString());
-}, {passive:false});
+},{passive:false});
 
-// ── 多螢幕 ──
 let displays=[], currentDisplay=null, ready=false;
-ipcRenderer.on('screen-info', (e,{displays:d})=>{
+ipcRenderer.on('screen-info',(e,{displays:d})=>{
   displays=d;
   if(!ready){ currentDisplay=displays[0]; ready=true; loop(); }
 });
 function curDisp(){ return currentDisplay||displays[0]; }
 
-// ── 路徑（斜切角落，底部貼邊）──
-const CHAMFER=40;
-const BODY_BOTTOM=26*0.52; // slimePath flatY = R*0.52，底部到中心距離
-
 function getPathPts(disp){
   const {x:DX,y:DY,width:SW,height:SH}=disp;
-  const o=BODY_BOTTOM, c=CHAMFER;
-  // 中心點路徑（史萊姆中心走的路徑，往內縮 o）
-  // 對應的邊緣點（螢幕真實邊緣，用於足跡）
+  // 路徑點往內縮 MAX_FLAT_Y，讓視窗中心在路徑點，底部剛好在螢幕邊緣
+  const c=CHAMFER, o=MAX_FLAT_Y;
   return [
-    {x:DX+c+o,    y:DY+SH-o,   nx:0,  ny:1,  ex:DX+c,    ey:DY+SH   },
-    {x:DX+SW-c-o, y:DY+SH-o,   nx:0,  ny:1,  ex:DX+SW-c, ey:DY+SH   },
-    {x:DX+SW-o,   y:DY+SH-c-o, nx:1,  ny:0,  ex:DX+SW,   ey:DY+SH-c },
-    {x:DX+SW-o,   y:DY+c+o,    nx:1,  ny:0,  ex:DX+SW,   ey:DY+c    },
-    {x:DX+SW-c-o, y:DY+o,      nx:0,  ny:-1, ex:DX+SW-c, ey:DY      },
-    {x:DX+c+o,    y:DY+o,      nx:0,  ny:-1, ex:DX+c,    ey:DY      },
-    {x:DX+o,      y:DY+c+o,    nx:-1, ny:0,  ex:DX,      ey:DY+c    },
-    {x:DX+o,      y:DY+SH-c-o, nx:-1, ny:0,  ex:DX,      ey:DY+SH-c },
+    {x:DX+c+o,    y:DY+SH-o,   nx:0,  ny:1  },
+    {x:DX+SW-c-o, y:DY+SH-o,   nx:0,  ny:1  },
+    {x:DX+SW-o,   y:DY+SH-c-o, nx:1,  ny:0  },
+    {x:DX+SW-o,   y:DY+c+o,    nx:1,  ny:0  },
+    {x:DX+SW-c-o, y:DY+o,      nx:0,  ny:-1 },
+    {x:DX+c+o,    y:DY+o,      nx:0,  ny:-1 },
+    {x:DX+o,      y:DY+c+o,    nx:-1, ny:0  },
+    {x:DX+o,      y:DY+SH-c-o, nx:-1, ny:0  },
   ];
 }
 
-function tToWindowPos(t, disp){
+function tToPos(t, disp){
   const pts=getPathPts(disp), n=pts.length;
   const segs=[]; let total=0;
   for(let i=0;i<n;i++){
@@ -89,25 +84,17 @@ function tToWindowPos(t, disp){
   while(seg<n-1&&d>segs[seg]){d-=segs[seg];seg++;}
   const a=pts[seg],b=pts[(seg+1)%n];
   const frac=segs[seg]>0?d/segs[seg]:0;
-  const cx=a.x+(b.x-a.x)*frac, cy=a.y+(b.y-a.y)*frac;
+  // (ex,ey) = 螢幕邊緣點 = 史萊姆底部位置
+  // 路徑點已內縮 flatY，直接是繪製中心（視窗中心）
+  const x=a.x+(b.x-a.x)*frac, y=a.y+(b.y-a.y)*frac;
   const nx=a.nx+(b.nx-a.nx)*frac, ny=a.ny+(b.ny-a.ny)*frac;
-  const ex=a.ex+(b.ex-a.ex)*frac, ey=a.ey+(b.ey-a.ey)*frac;
   const bodyAngle=Math.atan2(ny,nx)-Math.PI/2;
-  // 視窗左上角：讓史萊姆中心在視窗中央，
-  // 但再根據朝向把視窗往螢幕內側偏移，確保身體不超出視窗
-  // ny>0 底部朝下(底邊)：視窗往上偏，讓身體在下半部
-  // ny<0 底部朝上(頂邊)：視窗往下偏，讓身體在上半部
-  // nx>0 底部朝右(右邊)：視窗往左偏
-  // nx<0 底部朝左(左邊)：視窗往右偏
-  const R_cur = 26 * slimeScale;
-  const flatY = R_cur * 0.52; // 底部到中心距離
-  const topH  = R_cur * 0.88; // 頂部到中心距離（約）
-  // 沿法線方向的偏移：讓身體完全在視窗內
-  // 視窗中心在 (W/2, H/2)，身體底部在旋轉後的 +y 方向
-  // 所以視窗中心要比史萊姆中心往法線反方向偏移
-  const offX = nx * (H/2 - flatY - 2);
-  const offY = ny * (H/2 - flatY - 2);
-  return {wx:Math.round(cx-W/2+offX), wy:Math.round(cy-H/2+offY), cx,cy,ex,ey,nx,ny,bodyAngle};
+  const flatY=R_BASE*slimeScale*0.52;
+  // 足跡點在螢幕邊緣（路徑點往外推 flatY）
+  const ex=x+nx*flatY, ey=y+ny*flatY;
+  // 視窗左上角讓路徑點在視窗中心
+  const wx=Math.round(x-W/2), wy=Math.round(y-H/2);
+  return {wx,wy,x,y,ex,ey,nx,ny,bodyAngle};
 }
 
 function snapToEdge(absX,absY){
@@ -132,7 +119,6 @@ function snapToEdge(absX,absY){
   return {disp:bestDisp,t:bestT};
 }
 
-// ── 狀態 ──
 let t=0.75,speed=0,targetSpeed=0;
 let blobT=0,blinkTimer=140,blinkFrame=0;
 let lean=0,leanV=0;
@@ -142,13 +128,12 @@ let idleNudgeTimer=200;
 let state='idle',stateTimer=150,autoMoveDir=1;
 let isDragging=false,winAbsX=0,winAbsY=0;
 
-// ── 拖曳 ──
-canvas.addEventListener('mousedown', e=>{
+canvas.addEventListener('mousedown',e=>{
   if(e.button!==0) return;
   isDragging=true; canvas.classList.add('dragging'); state='dragging';
   ipcRenderer.send('start-drag',{mouseX:e.screenX,mouseY:e.screenY});
 });
-window.addEventListener('mouseup', ()=>{
+window.addEventListener('mouseup',()=>{
   ipcRenderer.send('end-drag');
   if(!isDragging) return;
   isDragging=false; canvas.classList.remove('dragging');
@@ -159,7 +144,26 @@ window.addEventListener('mouseup', ()=>{
 });
 ipcRenderer.on('drag-move',(e,{winX,winY})=>{ winAbsX=winX; winAbsY=winY; });
 
-// ── 繪圖 ──
+const BLOBS=[];
+let lastBX=-999,lastBY=-999;
+
+function makeOrganicBlob(ex,ey,nx,ny,tx,ty){
+  const lenAlong=8+Math.random()*16,lenDeep=4+Math.random()*8;
+  const offT=(Math.random()-0.5)*lenAlong*0.6;
+  const steps=3+Math.floor(Math.random()*2);
+  const ctrlPts=[];
+  const startT=-lenAlong+offT,endT=lenAlong+offT;
+  ctrlPts.push({t:startT,d:Math.random()*lenDeep*0.3});
+  for(let i=1;i<steps;i++){
+    const frac=i/steps,baseDepth=Math.sin(frac*Math.PI)*lenDeep;
+    ctrlPts.push({t:startT+(endT-startT)*frac+(Math.random()-0.5)*6,d:Math.max(0.5,baseDepth+(Math.random()-0.5)*lenDeep*0.7)});
+  }
+  ctrlPts.push({t:endT,d:Math.random()*lenDeep*0.3});
+  const topPts=ctrlPts.map(p=>({x:ex+tx*p.t-nx*(p.d*0.1+Math.random()*1.5),y:ey+ty*p.t-ny*(p.d*0.1+Math.random()*1.5)}));
+  const botPts=[...ctrlPts].reverse().map(p=>({x:ex+tx*p.t-nx*(p.d+Math.random()*2),y:ey+ty*p.t-ny*(p.d+Math.random()*2)}));
+  return [...topPts,...botPts];
+}
+
 function slimePath(R,lx,jx,jy,jt,jb,br){
   const fy=R*.52,bY=br*.13,bX=br*-.07;
   const hw=R*(1.08+jx*.18+jb*.12+bX);
@@ -171,47 +175,40 @@ function slimePath(R,lx,jx,jy,jt,jb,br){
   ctx.bezierCurveTo(sx+lx,sy,hw+lx*.2,fy*.15,hw,fy);
   ctx.lineTo(-hw,fy); ctx.closePath();
 }
-
 function injectJelly(ix,iy,it){jXv+=ix;jYv+=iy;jTv+=it;}
-
 function drawFace(R,ll,b,eo){
   const ey2=-R*.18+jY*R*.3+b*R*.08,es=ll*.25,sc=R/26;
   [-9,9].forEach(ex=>{
-    ctx.save(); ctx.translate(ex*sc+es,ey2);
-    ctx.beginPath(); ctx.ellipse(0,0,5.5*sc,Math.max(eo*1.6*sc,.5),0,0,Math.PI*2);
-    ctx.fillStyle='rgba(5,18,40,0.92)'; ctx.fill();
-    if(eo>.3){
-      ctx.beginPath(); ctx.ellipse(-1.5*sc,-.5*sc,1.4*sc,.6*sc,0,0,Math.PI*2);
-      ctx.fillStyle='rgba(255,255,255,0.55)'; ctx.fill();
-    }
+    ctx.save();ctx.translate(ex*sc+es,ey2);
+    ctx.beginPath();ctx.ellipse(0,0,5.5*sc,Math.max(eo*1.6*sc,.5),0,0,Math.PI*2);
+    ctx.fillStyle='rgba(5,18,40,0.92)';ctx.fill();
+    if(eo>.3){ctx.beginPath();ctx.ellipse(-1.5*sc,-.5*sc,1.4*sc,.6*sc,0,0,Math.PI*2);ctx.fillStyle='rgba(255,255,255,0.55)';ctx.fill();}
     ctx.restore();
   });
   const my=R*.14+jY*R*.22+b*R*.05;
-  ctx.beginPath(); ctx.moveTo(-4.5*sc+ll*.15,my); ctx.lineTo(4.5*sc+ll*.15,my);
-  ctx.strokeStyle='rgba(5,20,50,0.75)'; ctx.lineWidth=1.5*sc; ctx.lineCap='round'; ctx.stroke();
+  ctx.beginPath();ctx.moveTo(-4.5*sc+ll*.15,my);ctx.lineTo(4.5*sc+ll*.15,my);
+  ctx.strokeStyle='rgba(5,20,50,0.75)';ctx.lineWidth=1.5*sc;ctx.lineCap='round';ctx.stroke();
 }
 
+// 畫在視窗中心(W/2,H/2)
+// 視窗已定位讓路徑點在視窗中心，路徑點內縮了flatY
+// rotate → translate(0,-flatY) → 底部回到路徑點 → 底部貼螢幕邊緣
 function drawSlime(bodyAngle){
-  const R=26*slimeScale, BIG=R*2.5;
-  ctx.save(); ctx.translate(W/2,H/2); ctx.rotate(bodyAngle);
+  const R=R_BASE*slimeScale, BIG=R*2.5;
+  const flatY=R*0.52;
+  const C=parseColor(baseColor);
+  ctx.save();
+  ctx.translate(W/2,H/2);
+  ctx.rotate(bodyAngle);
+  ctx.translate(0,-flatY);
   const b=breathAmp*Math.sin(breathT);
   const eo=blinkFrame>0?Math.max(0,1-blinkFrame/4):1;
-  const C=parseColor(baseColor);
-
-  // env glow
-  const eg=ctx.createRadialGradient(0,-R*.1,R*.2,0,R*.1,R*2);
-  eg.addColorStop(0,`${C.mid},0.18)`); eg.addColorStop(1,`${C.dark},0)`);
-  ctx.beginPath(); ctx.arc(0,0,R*1.8,0,Math.PI*2); ctx.fillStyle=eg; ctx.fill();
-
-  // body
   slimePath(R,lean,jX,jY,jT,jB,b);
   const base=ctx.createRadialGradient(0,-R*.05,2,0,R*.15,R*1.2);
   base.addColorStop(0,`${C.light},0.86)`);
   base.addColorStop(.45,`${C.mid},0.74)`);
   base.addColorStop(1,`${C.dark},0.56)`);
   ctx.fillStyle=base; ctx.fill();
-
-  // shading layers — all clipped to body
   const layers=[
     ()=>{const s=ctx.createRadialGradient(-R*.12,-R*.28,R*.05,0,-R*.05,R*1.1);s.addColorStop(0,`${C.light},0.28)`);s.addColorStop(.5,`${C.mid},0.08)`);s.addColorStop(1,`${C.dark},0)`);ctx.fillStyle=s;ctx.fillRect(-BIG,-BIG,BIG*2,BIG*2);},
     ()=>{const s=ctx.createLinearGradient(0,-R,0,R*.52);s.addColorStop(0,'rgba(255,255,255,0)');s.addColorStop(.3,'rgba(255,255,255,0)');s.addColorStop(.7,`${C.light},0.08)`);s.addColorStop(1,`${C.mid},0)`);ctx.fillStyle=s;ctx.fillRect(-BIG,-BIG,BIG*2,BIG*2);},
@@ -220,53 +217,42 @@ function drawSlime(bodyAngle){
     ()=>{const s=ctx.createRadialGradient(-R*.30,-R*.50,0,-R*.22,-R*.40,R*.52);s.addColorStop(0,'rgba(255,255,255,0.90)');s.addColorStop(.28,'rgba(255,255,255,0.32)');s.addColorStop(1,'rgba(255,255,255,0)');ctx.fillStyle=s;ctx.fillRect(-BIG,-BIG,BIG*2,BIG*2);},
     ()=>{const s=ctx.createRadialGradient(R*.38,R*.08,0,R*.32,R*.06,R*.38);s.addColorStop(0,`${C.light},0.18)`);s.addColorStop(1,`${C.mid},0)`);ctx.fillStyle=s;ctx.fillRect(-BIG,-BIG,BIG*2,BIG*2);},
   ];
-  for(const layer of layers){
-    ctx.save(); slimePath(R,lean,jX,jY,jT,jB,b); ctx.clip(); layer(); ctx.restore();
-  }
-
-  // contact shadow
-  ctx.save(); ctx.scale(1,.15);
-  const sy2=R*3.5,sh2=ctx.createRadialGradient(0,sy2,0,0,sy2,R*1.1);
-  sh2.addColorStop(0,`${C.mid},0.22)`); sh2.addColorStop(1,`${C.mid},0)`);
-  ctx.beginPath(); ctx.ellipse(0,sy2,R*1.1,R*.9,0,0,Math.PI*2);
-  ctx.fillStyle=sh2; ctx.fill(); ctx.restore();
-
+  for(const layer of layers){ctx.save();slimePath(R,lean,jX,jY,jT,jB,b);ctx.clip();layer();ctx.restore();}
   drawFace(R,lean,b,eo);
   ctx.restore();
 }
 
 function updateSprings(){
   const k=.09,d=.80;
-  jXv+=-jX*k;jXv*=d;jX+=jXv; jYv+=-jY*k;jYv*=d;jY+=jYv;
-  jTv+=-jT*.12;jTv*=.72;jT+=jTv; jBv+=-jB*k;jBv*=d;jB+=jBv;
-  jX=Math.max(-.6,Math.min(.6,jX)); jY=Math.max(-.6,Math.min(.6,jY));
-  jT=Math.max(-.6,Math.min(.6,jT)); jB=Math.max(-.6,Math.min(.6,jB));
+  jXv+=-jX*k;jXv*=d;jX+=jXv;jYv+=-jY*k;jYv*=d;jY+=jYv;
+  jTv+=-jT*.12;jTv*=.72;jT+=jTv;jBv+=-jB*k;jBv*=d;jB+=jBv;
+  jX=Math.max(-.6,Math.min(.6,jX));jY=Math.max(-.6,Math.min(.6,jY));
+  jT=Math.max(-.6,Math.min(.6,jT));jB=Math.max(-.6,Math.min(.6,jB));
 }
-
 function update(){
-  blobT+=.028; stateTimer--;
-  if(state==='dragging'){ targetBreathAmp=.5; targetSpeed=0; }
+  blobT+=.028;stateTimer--;
+  if(state==='dragging'){targetBreathAmp=.5;targetSpeed=0;}
   else if(state==='idle'){
-    targetSpeed=0; targetBreathAmp=1.0;
+    targetSpeed=0;targetBreathAmp=1.0;
     idleNudgeTimer--;
-    if(idleNudgeTimer<=0){ idleNudgeTimer=Math.random()*240+160; injectJelly((Math.random()-.5)*.08,-.08,.15); }
-    if(stateTimer<=0){ state='moving'; autoMoveDir=Math.random()<.5?1:-1; targetSpeed=(0.00015+Math.random()*.00028)*autoMoveDir; stateTimer=Math.random()*400+250; injectJelly(autoMoveDir*.10,-.08,.18); }
+    if(idleNudgeTimer<=0){idleNudgeTimer=Math.random()*240+160;injectJelly((Math.random()-.5)*.08,-.08,.15);}
+    if(stateTimer<=0){state='moving';autoMoveDir=Math.random()<.5?1:-1;targetSpeed=(0.00015+Math.random()*.00028)*autoMoveDir;stateTimer=Math.random()*400+250;injectJelly(autoMoveDir*.10,-.08,.18);}
   } else if(state==='moving'){
     targetBreathAmp=.3;
     const sp=Math.abs(speed);
-    jXv+=Math.sin(blobT*2.6)*sp*1200*.004; jYv+=Math.cos(blobT*2.0)*sp*1200*.003; jTv+=Math.sin(blobT*4.0)*sp*1200*.003;
-    if(stateTimer<=0){ state='stopping'; targetSpeed=0; stateTimer=80; }
+    jXv+=Math.sin(blobT*2.6)*sp*1200*.004;jYv+=Math.cos(blobT*2.0)*sp*1200*.003;jTv+=Math.sin(blobT*4.0)*sp*1200*.003;
+    if(stateTimer<=0){state='stopping';targetSpeed=0;stateTimer=80;}
   } else if(state==='stopping'){
     targetBreathAmp=.6;
-    if(Math.abs(speed)<.00002&&stateTimer<=0){ injectJelly(.08,-.10,.15); state='idle'; stateTimer=Math.random()*350+200; }
+    if(Math.abs(speed)<.00002&&stateTimer<=0){injectJelly(.08,-.10,.15);state='idle';stateTimer=Math.random()*350+200;}
   }
-  breathAmp+=(targetBreathAmp-breathAmp)*.015; breathT+=.018;
-  const psp=speed; speed+=(targetSpeed-speed)*.030; t+=speed;
+  breathAmp+=(targetBreathAmp-breathAmp)*.015;breathT+=.018;
+  const psp=speed;speed+=(targetSpeed-speed)*.030;t+=speed;
   const ds=speed-psp;
-  if(Math.abs(ds)>.00003) injectJelly(ds*2500,-Math.abs(ds)*1500,ds*3000);
+  if(Math.abs(ds)>.00003)injectJelly(ds*2500,-Math.abs(ds)*1500,ds*3000);
   updateSprings();
-  leanV+=(speed*16000-lean)*.06; leanV*=.80; lean+=leanV; lean=Math.max(-10,Math.min(10,lean));
-  blinkTimer--; if(blinkTimer<=0){blinkFrame=7;blinkTimer=Math.random()*200+100;} if(blinkFrame>0) blinkFrame--;
+  leanV+=(speed*16000-lean)*.06;leanV*=.80;lean+=leanV;lean=Math.max(-10,Math.min(10,lean));
+  blinkTimer--;if(blinkTimer<=0){blinkFrame=7;blinkTimer=Math.random()*200+100;}if(blinkFrame>0)blinkFrame--;
 }
 
 function loop(){
@@ -274,10 +260,12 @@ function loop(){
   ctx.clearRect(0,0,W,H);
   update();
   if(!isDragging){
-    const pos=tToWindowPos(t,curDisp());
+    const pos=tToPos(t,curDisp());
     winAbsX=pos.wx; winAbsY=pos.wy;
-    ipcRenderer.send('move-window',{x:pos.wx,y:pos.wy});
-    ipcRenderer.send('trail-blob',{cx:pos.cx,cy:pos.cy,ex:pos.ex,ey:pos.ey,nx:pos.nx,ny:pos.ny});
+    if(isFinite(pos.wx)&&isFinite(pos.wy)){
+      ipcRenderer.send('move-window',{x:pos.wx,y:pos.wy});
+    }
+    ipcRenderer.send('trail-blob',{x:pos.x,y:pos.y,nx:pos.nx,ny:pos.ny,flatY:MAX_FLAT_Y});
     drawSlime(pos.bodyAngle);
   } else {
     drawSlime(0);

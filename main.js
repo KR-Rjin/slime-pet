@@ -18,10 +18,10 @@ function createTrayIcon() {
 function getDisplayInfo() {
   return screen.getAllDisplays().map(d => ({
     id: d.id,
-    x: d.workArea.x,
-    y: d.workArea.y,
-    width: d.workArea.width,
-    height: d.workArea.height,
+    x: d.bounds.x,
+    y: d.workArea.y,       // 用 workArea.y 避開 macOS menu bar
+    width: d.bounds.width,
+    height: d.bounds.height - (d.workArea.y - d.bounds.y), // 扣掉 menu bar 高度
   }));
 }
 
@@ -54,10 +54,20 @@ function buildContextMenu() {
   ]);
 }
 
-function createTrailWindow(display) {
-  const { x, y, width, height } = display.workArea;
+function createTrailWindow() {
+  // trail window 覆蓋所有螢幕的聯合區域
+  const displays = screen.getAllDisplays();
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const d of displays) {
+    minX = Math.min(minX, d.bounds.x);
+    minY = Math.min(minY, d.bounds.y);
+    maxX = Math.max(maxX, d.bounds.x + d.bounds.width);
+    maxY = Math.max(maxY, d.bounds.y + d.bounds.height);
+  }
   trailWin = new BrowserWindow({
-    x, y, width, height,
+    x: minX, y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
     transparent: true, frame: false,
     alwaysOnTop: true, skipTaskbar: true,
     resizable: false, hasShadow: false,
@@ -66,14 +76,15 @@ function createTrailWindow(display) {
   });
   trailWin.loadFile('trail.html');
   trailWin.setIgnoreMouseEvents(true);
+  trailWin.setAlwaysOnTop(true, 'screen-saver');
 }
 
 function createSlimeWindow(display) {
-  const { x, y, width, height } = display.workArea;
+  const { x, y, width, height } = display.bounds;
   slimeWin = new BrowserWindow({
-    width: 120, height: 120,
-    x: Math.floor(x + width/2 - 60),
-    y: y + height - 120,
+    width: 170, height: 170,
+    x: Math.floor(x + width/2 - 85),
+    y: y + height - 170,
     transparent: true, frame: false,
     alwaysOnTop: true, skipTaskbar: true,
     resizable: false, hasShadow: false,
@@ -89,27 +100,39 @@ function createSlimeWindow(display) {
   screen.on('display-added',   () => slimeWin.webContents.send('screen-info', { displays: getDisplayInfo() }));
   screen.on('display-removed', () => slimeWin.webContents.send('screen-info', { displays: getDisplayInfo() }));
 
-  // 右鍵選單
   ipcMain.on('show-context-menu', () => {
     buildContextMenu().popup({ window: slimeWin });
   });
 
-  // 自動移動
   ipcMain.on('move-window', (e, { x, y }) => {
     if (!dragging && slimeWin && !slimeWin.isDestroyed()) {
-      const nx = parseInt(x, 10) || 0, ny = parseInt(y, 10) || 0;
-      if (isFinite(nx) && isFinite(ny)) slimeWin.setPosition(nx, ny);
+      let nx = parseInt(x, 10) || 0, ny = parseInt(y, 10) || 0;
+      if (isFinite(nx) && isFinite(ny)) {
+        // 找出史萊姆目前的螢幕（根據視窗中心）
+        const [cx, cy] = [nx + 60, ny + 60];
+        const displays = screen.getAllDisplays();
+        let curDisplay = displays[0];
+        for (const d of displays) {
+          if (cx >= d.bounds.x && cx < d.bounds.x + d.bounds.width &&
+              cy >= d.bounds.y && cy < d.bounds.y + d.bounds.height) {
+            curDisplay = d; break;
+          }
+        }
+        // 如果視窗中心跑出目前螢幕，clamp 回來
+        const b = curDisplay.bounds;
+        nx = Math.max(b.x - 60, Math.min(b.x + b.width - 60, nx));
+        ny = Math.max(b.y - 60, Math.min(b.y + b.height - 60, ny));
+        slimeWin.setPosition(nx, ny);
+      }
     }
   });
 
-  // 足跡座標
   ipcMain.on('trail-blob', (e, data) => {
     if (trailWin && !trailWin.isDestroyed()) {
       trailWin.webContents.send('trail-blob', data);
     }
   });
 
-  // 拖曳
   ipcMain.on('start-drag', (e, { mouseX, mouseY }) => {
     dragging = true;
     const [wx, wy] = slimeWin.getPosition();
@@ -136,13 +159,12 @@ function createTray() {
   tray = new Tray(createTrayIcon());
   tray.setToolTip('史萊姆寵物');
   tray.setContextMenu(buildContextMenu());
-  // 點托盤也重建選單確保最新狀態
   tray.on('click', () => tray.setContextMenu(buildContextMenu()));
 }
 
 app.whenReady().then(() => {
   const primary = screen.getPrimaryDisplay();
-  createTrailWindow(primary);
+  createTrailWindow();
   createSlimeWindow(primary);
   createTray();
 });
